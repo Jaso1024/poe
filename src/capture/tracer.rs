@@ -13,15 +13,8 @@ use crate::capture::syscalls::*;
 use crate::events::types::*;
 use crate::util;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SyscallPhase {
-    Entry,
-    Exit,
-}
-
 struct TracedProcess {
     pid: Pid,
-    phase: SyscallPhase,
     pending_syscall: Option<PendingSyscall>,
     alive: bool,
 }
@@ -55,7 +48,7 @@ impl Tracer {
             processes: HashMap::new(),
             root_pid: None,
             event_tx,
-            decoder: SyscallDecoder::new(base_ts),
+            decoder: SyscallDecoder::new(),
             base_ts,
         }
     }
@@ -116,19 +109,17 @@ impl Tracer {
                 ptrace::setoptions(child, opts)?;
 
                 let cwd = util::procfs::read_cwd(raw_pid).unwrap_or_default();
-                let cmdline = util::procfs::read_cmdline(raw_pid).unwrap_or_else(|_| argv.to_vec());
 
                 let proc_info = ProcessInfo {
                     proc_id: raw_pid,
                     parent_proc_id: None,
-                    argv: cmdline,
+                    argv: argv.to_vec(),
                     cwd,
                     start_ts: 0,
                 };
 
                 self.processes.insert(raw_pid, TracedProcess {
                     pid: child,
-                    phase: SyscallPhase::Entry,
                     pending_syscall: None,
                     alive: true,
                 });
@@ -254,91 +245,73 @@ impl Tracer {
     fn handle_syscall(&mut self, pid: Pid) -> Result<()> {
         let raw = pid.as_raw();
 
-        let phase = self
-            .processes
-            .get(&raw)
-            .map(|p| p.phase)
-            .unwrap_or(SyscallPhase::Entry);
+        let regs = match ptrace::getregs(pid) {
+            Ok(r) => r,
+            Err(_) => return Ok(()),
+        };
 
-        match phase {
-            SyscallPhase::Entry => {
-                let regs = match ptrace::getregs(pid) {
-                    Ok(r) => r,
-                    Err(_) => {
-                        self.toggle_phase(raw);
-                        return Ok(());
-                    }
+        let nr = regs.orig_rax;
+        let rax = regs.rax as i64;
+
+        // On x86_64, at syscall entry the kernel sets rax = -ENOSYS (-38).
+        // At syscall exit, rax contains the return value.
+        // We use this to determine entry vs exit without fragile toggling.
+        let is_entry = rax == -38;
+
+        if is_entry {
+            let args = [regs.rdi, regs.rsi, regs.rdx, regs.r10, regs.r8, regs.r9];
+
+            if is_interesting_syscall(nr) {
+                let path_reader = |addr: u64| -> Option<String> {
+                    read_string_from_process(pid, addr, 4096)
+                };
+                let addr_reader = |addr: u64, len: usize| -> Option<Vec<u8>> {
+                    read_bytes_from_process(pid, addr, len)
                 };
 
-                let nr = regs.orig_rax;
-                let args = [regs.rdi, regs.rsi, regs.rdx, regs.r10, regs.r8, regs.r9];
-
-                if is_interesting_syscall(nr) {
-                    let path_reader = |addr: u64| -> Option<String> {
-                        read_string_from_process(pid, addr, 4096)
-                    };
-                    let addr_reader = |addr: u64, len: usize| -> Option<Vec<u8>> {
-                        read_bytes_from_process(pid, addr, len)
-                    };
-
-                    let ts = self.relative_ts();
-                    let entry_info = self.decoder.decode_entry(
-                        raw, ts, nr, args, &path_reader, &addr_reader,
-                    );
-
-                    if let Some(proc) = self.processes.get_mut(&raw) {
-                        proc.pending_syscall = Some(PendingSyscall {
-                            nr,
-                            args,
-                            entry_info,
-                        });
-                    }
-                }
-
-                self.toggle_phase(raw);
-            }
-
-            SyscallPhase::Exit => {
-                let regs = match ptrace::getregs(pid) {
-                    Ok(r) => r,
-                    Err(_) => {
-                        self.toggle_phase(raw);
-                        return Ok(());
-                    }
-                };
-
-                let ret = regs.rax as i64;
+                let ts = self.relative_ts();
+                let entry_info = self.decoder.decode_entry(
+                    raw, ts, nr, args, &path_reader, &addr_reader,
+                );
 
                 if let Some(proc) = self.processes.get_mut(&raw) {
-                    if let Some(pending) = proc.pending_syscall.take() {
-                        match &pending.entry_info {
-                            SyscallEntryInfo::File { .. } => {
-                                if let Some(file_event) = self.decoder.finalize_file_event(
-                                    raw,
-                                    &pending.entry_info,
-                                    ret,
-                                    pending.nr,
-                                ) {
-                                    let _ = self.event_tx.send(TraceEvent::File(file_event));
-                                }
+                    proc.pending_syscall = Some(PendingSyscall {
+                        nr,
+                        args,
+                        entry_info,
+                    });
+                }
+            }
+        } else {
+            let ret = rax;
+
+            if let Some(proc) = self.processes.get_mut(&raw) {
+                if let Some(pending) = proc.pending_syscall.take() {
+                    match &pending.entry_info {
+                        SyscallEntryInfo::File { .. } => {
+                            if let Some(file_event) = self.decoder.finalize_file_event(
+                                raw,
+                                &pending.entry_info,
+                                ret,
+                                pending.nr,
+                            ) {
+                                let _ = self.event_tx.send(TraceEvent::File(file_event));
                             }
-                            SyscallEntryInfo::Net { .. } => {
-                                if let Some(net_event) = self.decoder.finalize_net_event(
-                                    raw,
-                                    &pending.entry_info,
-                                    ret,
-                                    pending.nr,
-                                    pending.args,
-                                ) {
-                                    let _ = self.event_tx.send(TraceEvent::Net(net_event));
-                                }
-                            }
-                            SyscallEntryInfo::Ignored => {}
                         }
+                        SyscallEntryInfo::Net { .. } => {
+                            if let Some(net_event) = self.decoder.finalize_net_event(
+                                raw,
+                                &pending.entry_info,
+                                ret,
+                                pending.nr,
+                                pending.args,
+                            ) {
+                                let _ = self.event_tx.send(TraceEvent::Net(net_event));
+                            }
+                        }
+                        SyscallEntryInfo::Ignored => {}
                     }
                 }
-
-                self.toggle_phase(raw);
             }
         }
 
@@ -371,7 +344,6 @@ impl Tracer {
 
                 self.processes.insert(new_pid_raw, TracedProcess {
                     pid: new_pid,
-                    phase: SyscallPhase::Entry,
                     pending_syscall: None,
                     alive: true,
                 });
@@ -399,7 +371,6 @@ impl Tracer {
                 }));
 
                 if let Some(proc) = self.processes.get_mut(&raw) {
-                    proc.phase = SyscallPhase::Entry;
                     proc.pending_syscall = None;
                 }
             }
@@ -429,15 +400,6 @@ impl Tracer {
         }
 
         Ok(())
-    }
-
-    fn toggle_phase(&mut self, raw_pid: i32) {
-        if let Some(proc) = self.processes.get_mut(&raw_pid) {
-            proc.phase = match proc.phase {
-                SyscallPhase::Entry => SyscallPhase::Exit,
-                SyscallPhase::Exit => SyscallPhase::Entry,
-            };
-        }
     }
 
     fn mark_dead(&mut self, raw_pid: i32) {

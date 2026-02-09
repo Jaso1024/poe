@@ -58,6 +58,17 @@ enum Commands {
         json: bool,
     },
 
+    /// Query a debug packet for specific data
+    Query {
+        /// Path to the .poepack file
+        #[arg(required = true)]
+        packet: PathBuf,
+
+        /// Query to run (summary, processes, events, files, net, stacks, stdout, stderr, stats, files:<pattern>, net:<pattern>, sql:<query>)
+        #[arg(required = true)]
+        query: String,
+    },
+
     /// Check system capabilities for poe
     Doctor,
 }
@@ -74,6 +85,8 @@ fn main() {
         } => cli::run::execute(command, always, mode, output),
 
         Commands::Explain { packet, json } => cli::explain::execute(packet, json),
+
+        Commands::Query { packet, query } => cli::query::execute(packet, query),
 
         Commands::Doctor => cli::doctor::execute(),
     };

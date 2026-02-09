@@ -172,13 +172,11 @@ pub enum DecodedSyscall {
     Ignored,
 }
 
-pub struct SyscallDecoder {
-    base_ts: u64,
-}
+pub struct SyscallDecoder;
 
 impl SyscallDecoder {
-    pub fn new(base_ts: u64) -> Self {
-        Self { base_ts }
+    pub fn new() -> Self {
+        Self
     }
 
     pub fn decode_entry(
@@ -190,7 +188,7 @@ impl SyscallDecoder {
         path_reader: &dyn Fn(u64) -> Option<String>,
         addr_reader: &dyn Fn(u64, usize) -> Option<Vec<u8>>,
     ) -> SyscallEntryInfo {
-        let rel_ts = ts.saturating_sub(self.base_ts);
+        let rel_ts = ts;
 
         match nr {
             SYS_OPEN | SYS_CREAT => {

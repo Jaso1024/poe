@@ -567,6 +567,41 @@ impl TraceDb {
             .map_err(Into::into)
     }
 
+    pub fn raw_query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(sql)?;
+        let column_names: Vec<String> = stmt
+            .column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let rows = stmt.query_map([], |row| {
+            let mut map = serde_json::Map::new();
+            for (i, name) in column_names.iter().enumerate() {
+                let val: rusqlite::Result<rusqlite::types::Value> = row.get(i);
+                let json_val = match val {
+                    Ok(rusqlite::types::Value::Null) => serde_json::Value::Null,
+                    Ok(rusqlite::types::Value::Integer(n)) => serde_json::json!(n),
+                    Ok(rusqlite::types::Value::Real(f)) => serde_json::json!(f),
+                    Ok(rusqlite::types::Value::Text(s)) => serde_json::json!(s),
+                    Ok(rusqlite::types::Value::Blob(b)) => {
+                        serde_json::json!(format!("<blob {} bytes>", b.len()))
+                    }
+                    Err(_) => serde_json::Value::Null,
+                };
+                map.insert(name.clone(), json_val);
+            }
+            Ok(serde_json::Value::Object(map))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
     pub fn checkpoint(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
