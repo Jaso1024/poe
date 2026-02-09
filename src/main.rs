@@ -42,6 +42,10 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
+        /// Baseline .poepack to diff against after run
+        #[arg(long)]
+        diff: Option<PathBuf>,
+
         /// The command to run (after --)
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
@@ -52,6 +56,21 @@ enum Commands {
         /// Path to the .poepack file
         #[arg(required = true)]
         packet: PathBuf,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Compare two debug packets to find divergences
+    Diff {
+        /// Baseline .poepack file
+        #[arg(required = true)]
+        baseline: PathBuf,
+
+        /// Candidate .poepack file
+        #[arg(required = true)]
+        candidate: PathBuf,
 
         /// Output as JSON
         #[arg(long)]
@@ -81,10 +100,17 @@ fn main() {
             always,
             mode,
             output,
+            diff,
             command,
-        } => cli::run::execute(command, always, mode, output),
+        } => cli::run::execute(command, always, mode, output, diff),
 
         Commands::Explain { packet, json } => cli::explain::execute(packet, json),
+
+        Commands::Diff {
+            baseline,
+            candidate,
+            json,
+        } => cli::diff::execute(baseline, candidate, json),
 
         Commands::Query { packet, query } => cli::query::execute(packet, query),
 

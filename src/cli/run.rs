@@ -6,6 +6,7 @@ use colored::Colorize;
 
 use crate::capture::runner::{self, RunConfig};
 use crate::events::types::CaptureMode;
+use crate::explain;
 use crate::util;
 
 pub fn execute(
@@ -13,6 +14,7 @@ pub fn execute(
     always: bool,
     mode: Option<String>,
     output_dir: Option<PathBuf>,
+    diff_baseline: Option<PathBuf>,
 ) -> Result<()> {
     if command.is_empty() {
         anyhow::bail!("no command specified");
@@ -25,10 +27,12 @@ pub fn execute(
 
     let output_dir = output_dir.unwrap_or_else(|| PathBuf::from("."));
 
+    let force_always = always || diff_baseline.is_some();
+
     let config = RunConfig {
         command: command.clone(),
         capture_mode,
-        always_emit: always,
+        always_emit: force_always,
         output_dir,
         ..Default::default()
     };
@@ -72,6 +76,12 @@ pub fn execute(
             pack_path.display()
         );
         eprintln!("{}", "------------------------".yellow().bold());
+
+        if let Some(ref baseline_path) = diff_baseline {
+            eprintln!();
+            let diff_result = explain::diff::diff_packs(baseline_path, pack_path)?;
+            crate::cli::diff::print_diff(&diff_result);
+        }
     }
 
     let exit_code = result.exit_code.unwrap_or(if result.signal.is_some() { 128 + result.signal.unwrap_or(0) } else { 1 });

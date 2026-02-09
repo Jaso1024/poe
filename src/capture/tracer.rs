@@ -215,15 +215,48 @@ impl Tracer {
                         Signal::SIGSTOP | Signal::SIGTRAP => None,
                         _ => {
                             let ts = self.relative_ts();
+                            let sig_num = sig as i32;
+                            let is_crash = matches!(
+                                sig,
+                                Signal::SIGSEGV
+                                    | Signal::SIGBUS
+                                    | Signal::SIGILL
+                                    | Signal::SIGFPE
+                                    | Signal::SIGABRT
+                            );
+
+                            let mut detail = format!(
+                                "received {} ({})",
+                                util::signal_name(sig_num),
+                                sig_num
+                            );
+
+                            if is_crash {
+                                if let Ok(regs) = ptrace::getregs(pid) {
+                                    detail.push_str(&format!(
+                                        " rip={:#x} rsp={:#x} rbp={:#x} rax={:#x} rdi={:#x} rsi={:#x}",
+                                        regs.rip, regs.rsp, regs.rbp, regs.rax, regs.rdi, regs.rsi,
+                                    ));
+                                }
+
+                                if let Ok(siginfo) = ptrace::getsiginfo(pid) {
+                                    let fault_addr = unsafe { siginfo.si_addr() } as u64;
+                                    if fault_addr != 0 {
+                                        detail.push_str(&format!(" fault_addr={:#x}", fault_addr));
+                                    }
+                                    detail.push_str(&format!(" si_code={}", siginfo.si_code));
+                                }
+
+                                if let Ok(maps) = util::procfs::read_maps(pid.as_raw()) {
+                                    detail.push_str(&format!(" maps=[{}]", maps.len()));
+                                }
+                            }
+
                             let _ = self.event_tx.send(TraceEvent::Generic(Event {
                                 ts,
                                 proc_id: pid.as_raw(),
                                 kind: EventKind::Signal,
-                                detail: format!(
-                                    "received {} ({})",
-                                    util::signal_name(sig as i32),
-                                    sig as i32
-                                ),
+                                detail,
                             }));
                             Some(sig)
                         }
