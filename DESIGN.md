@@ -61,7 +61,7 @@ poe run -- <cmd>
 
 ```
 src/
-  main.rs              CLI entry point (clap)
+  main.rs              CLI entry point (clap), command dispatch
   lib.rs               Module declarations
 
   capture/
@@ -70,31 +70,56 @@ src/
                        sockaddr parsing, file/net/process classification
     stdio.rs           pipe2(O_CLOEXEC), relay threads, ring buffer capture
     stacks.rs          perf_event_open, mmap ring buffer, sample parsing
-    runner.rs          orchestrates tracer + stdio + stacks + db writer
+    runner.rs          orchestrates tracer + stdio + stacks + db writer +
+                       language hooks + native trace integration
 
   trace/
     db.rs              SQLite schema, batch insert, query methods, WAL/checkpoint
 
   events/
     types.rs           RunInfo, ProcessInfo, FileEvent, NetEvent, StackSample,
-                       StdioChunk, TraceEvent enum, CaptureMode, TriggerReason
+                       StdioChunk, TraceEvent enum, CaptureMode, TriggerReason,
+                       NativeTraceEnter/Exit, Python event kinds
 
   pack/
-    writer.rs          zip creation: summary.json + trace.sqlite + artifacts/
+    writer.rs          zip creation: summary.json + trace.sqlite + artifacts/ +
+                       trace_context metadata
     reader.rs          zip extraction, PackReader API
     summary.rs         summary.json generation with failure classification
 
   explain/
     analyzer.rs        failure explanation, error pattern detection, timeline
-                       construction, file/net activity summary, crash analysis
+                       construction, file/net activity summary, crash analysis,
+                       Python exception rendering, Rust panic integration
     diff.rs            two-pack comparison: exit code, duration, process tree,
                        file paths, network connections, byte counts, stderr
+    realtime_diff.rs   real-time divergence detection during --diff captures
+
+  build/
+    instrument.rs      poe build: compiler wrappers, -finstrument-functions,
+                       C runtime compilation, runtime trace reader
+
+  hooks/
+    mod.rs             language hook module declarations
+    adapter.rs         LanguageAdapter trait, AdapterManager, PythonAdapter
+    python.rs          Python auto-hook: sitecustomize.py injection, pipe-based
+                       JSONL event reader, frame/exception/call tracing
+    rust.rs            Rust support: panic output parser, backtrace parser,
+                       RUST_BACKTRACE injection, error pattern detection
+
+  serve/
+    server.rs          HTTP API: pack upload, listing, explain, query endpoints
+
+  distributed/
+    trace_context.rs   trace ID propagation, span correlation, poe trace command
 
   cli/
     run.rs             poe run [--always] [--diff baseline] -- <cmd>
     explain.rs         poe explain <packet> [--json]
     diff.rs            poe diff <baseline> <candidate> [--json]
     query.rs           poe query <packet> <query>
+    build.rs           poe build [--output dir] -- <build-cmd>
+    trace.rs           poe trace <pack1> <pack2> ... [--json]
     doctor.rs          poe doctor
 
   redact/
@@ -109,6 +134,11 @@ src/
     ringbuf.rs         ByteRing (fixed-size circular buffer), EventRing
     procfs.rs          /proc/<pid>/{maps,cmdline,cwd,environ,exe,status},
                        git_sha, hostname
+
+runtime/
+  poe_rt.c             C runtime library for -finstrument-functions: mmap'd
+                       ring buffer, __cyg_profile_func_enter/exit callbacks,
+                       crash-safe (survives SIGSEGV/SIGFPE)
 ```
 
 ## .poepack Format
@@ -229,6 +259,49 @@ Structured data retrieval from a `.poepack`:
 - `net:<pattern>` -- net ops matching address pattern
 - `sql:<query>` -- raw SQL against trace.sqlite
 
+### `poe build [OPTIONS] -- <build-command>`
+
+Wraps a build system (make, ninja, cmake, etc.) to inject compile-time
+instrumentation via `-finstrument-functions`. Creates compiler wrapper scripts
+that intercept cc/gcc/g++/clang/clang++ invocations, adding the instrumentation
+flag and linking the poe C runtime library (`libpoe_rt.so`).
+
+The runtime library uses a mmap'd ring buffer that survives crashes (SIGSEGV,
+SIGFPE, etc.). Function entry/exit events are recorded with nanosecond
+timestamps, call site addresses, thread IDs, and call depth. After the
+instrumented program runs under `poe run`, the ring buffer is read, symbols are
+resolved via `nm`, and events are stored in the trace database.
+
+Options:
+- `--output <dir>` -- output directory for build artifacts
+
+### `poe serve [OPTIONS]`
+
+Starts an HTTP API server for `.poepack` analysis. Accepts pack uploads, stores
+them in a directory, and provides JSON API endpoints for listing, summarizing,
+analyzing, and querying packs. Designed for CI integration and editor extensions.
+
+Endpoints:
+- `POST /api/packs` -- upload a `.poepack`
+- `GET /api/packs` -- list all packs
+- `GET /api/packs/:id` -- get pack summary
+- `GET /api/packs/:id/explain` -- analyze pack (same as CLI explain)
+- `GET /api/packs/:id/query/:q` -- query pack data (stats, files, net, processes)
+
+Options:
+- `--bind <addr>` -- address to bind (default: 127.0.0.1:3000)
+- `--store <dir>` -- pack storage directory (default: ./poe-store)
+
+### `poe trace <pack1> <pack2> ... [--json]`
+
+Correlates multiple `.poepack` files into distributed execution traces. Groups
+packs by trace ID (propagated via `POE_TRACE_ID` environment variable) and shows
+parent-child span relationships. Each pack stores its trace context including
+trace_id, span_id, and parent_span_id.
+
+Options:
+- `--json` -- output as JSON
+
 ### `poe doctor`
 
 Checks system capabilities:
@@ -312,27 +385,27 @@ The redactor supports:
 
 ## Roadmap
 
-### Phase 0: MVP (current -- complete)
+### Phase 0: MVP (complete)
 
 Everything described above. Linux x86_64, ptrace-based capture, `.poepack` format, `poe run` / `poe explain` / `poe diff` / `poe query` / `poe doctor`.
 
-### Phase 1: Native Instrumentation
+### Phase 1: Native Instrumentation (complete)
 
 `poe build -- make/ninja/cmake` wraps the compiler to inject entry/exit probes into C/C++ code at compile time. This gives function-level tracing without ptrace overhead, and crash-safe ring buffers that survive SIGSEGV. The clang wrapper adds `-finstrument-functions` or equivalent and links a small runtime library.
 
-### Phase 2: Python Auto-hooks
+### Phase 2: Python Auto-hooks (complete)
 
 Inject `sitecustomize.py` into the Python process to enable frame tracing, `faulthandler`, and structured exception capture. No changes to user code -- poe sets `PYTHONPATH` to include its hook before exec. Captures Python-level stack frames, exception chains, and variable snapshots.
 
-### Phase 3: Rust Support
+### Phase 3: Rust Support (complete)
 
 Inject `RUSTFLAGS` through cargo to add instrumentation to Rust programs. Capture panic hooks, backtraces, and structured error chains.
 
-### Phase 4: Differential Execution
+### Phase 4: Differential Execution (complete)
 
 `poe run --diff <baseline> -- <candidate>` captures a new run and compares it against a baseline, highlighting the first point of behavioral divergence. Goes beyond the current diff command (which compares after the fact) to provide real-time divergence detection.
 
-### Phase 5: Language Adapters
+### Phase 5: Language Adapters (complete)
 
 Generalized adapter interface for any language runtime. Each adapter implements:
 - `on_load`: inject hooks into the process
@@ -340,11 +413,11 @@ Generalized adapter interface for any language runtime. Each adapter implements:
 - `on_exception`: capture structured error info
 - `on_exit`: finalize and flush
 
-### Phase 6: `poe serve`
+### Phase 6: `poe serve` (complete)
 
 HTTP API that accepts `.poepack` files and provides analysis endpoints. Enables integration with CI systems, editor extensions, and AI assistants. Stores packs for historical comparison.
 
-### Phase 7: Distributed Tracing
+### Phase 7: Distributed Tracing (complete)
 
 Correlate poe captures across multiple processes and machines. Propagate trace IDs through environment variables or protocol headers. Reconstruct distributed execution graphs.
 
@@ -361,4 +434,4 @@ Correlate poe captures across multiple processes and machines. Propagate trace I
 - Multithreaded programs work but thread creation is tracked via PTRACE_EVENT_CLONE
 - If a syscall legitimately returns -38 (ENOSYS), the entry/exit heuristic will misclassify it (extremely rare in practice)
 
-**Implementation language**: Rust. The codebase is ~6,500 lines across 32 source files. Dependencies are minimal and well-chosen: nix (ptrace/signal), rusqlite (bundled SQLite), clap (CLI), zip (pack format), chrono/uuid/sha2/serde (utilities).
+**Implementation language**: Rust (with a small C runtime library). The codebase is ~9,000 lines across 47 source files. Dependencies are minimal and well-chosen: nix (ptrace/signal), rusqlite (bundled SQLite), clap (CLI), zip (pack format), chrono/uuid/sha2/serde (utilities).

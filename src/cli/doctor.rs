@@ -46,12 +46,7 @@ pub fn execute() -> Result<()> {
             }
         };
 
-        println!(
-            "  [{}] {}: {}",
-            color_fn(icon),
-            check.name,
-            check.detail
-        );
+        println!("  [{}] {}: {}", color_fn(icon), check.name, check.detail);
     }
 
     println!();
@@ -73,8 +68,7 @@ pub fn execute() -> Result<()> {
     } else if warn_count > 0 {
         println!(
             "  {}",
-            "Some optional features are unavailable. Core functionality should work."
-                .yellow()
+            "Some optional features are unavailable. Core functionality should work.".yellow()
         );
     } else {
         println!(
@@ -104,7 +98,10 @@ fn check_kernel() -> Check {
         Check {
             name: "kernel version",
             status: CheckStatus::Ok,
-            detail: format!("{} (>= 4.8 required for full ptrace support)", version_short),
+            detail: format!(
+                "{} (>= 4.8 required for full ptrace support)",
+                version_short
+            ),
         }
     } else {
         Check {
@@ -170,10 +167,7 @@ fn check_perf() -> Check {
         "0" | "1" => Check {
             name: "perf_event_paranoid",
             status: CheckStatus::Ok,
-            detail: format!(
-                "{} (sufficient for user-space stack sampling)",
-                paranoid
-            ),
+            detail: format!("{} (sufficient for user-space stack sampling)", paranoid),
         },
         "2" => Check {
             name: "perf_event_paranoid",
@@ -183,10 +177,7 @@ fn check_perf() -> Check {
         "3" | "4" => Check {
             name: "perf_event_paranoid",
             status: CheckStatus::Warn,
-            detail: format!(
-                "{} (stack sampling disabled without CAP_PERFMON)",
-                paranoid
-            ),
+            detail: format!("{} (stack sampling disabled without CAP_PERFMON)", paranoid),
         },
         "N/A" => Check {
             name: "perf_event_paranoid",

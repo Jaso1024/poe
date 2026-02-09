@@ -107,27 +107,23 @@ pub fn execute(pack_path: PathBuf, query: String) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
 
-        "stdout" => {
-            match pack.stdout() {
-                Ok(data) => {
-                    std::io::Write::write_all(&mut std::io::stdout(), &data)?;
-                }
-                Err(_) => {
-                    eprintln!("no stdout captured");
-                }
+        "stdout" => match pack.stdout() {
+            Ok(data) => {
+                std::io::Write::write_all(&mut std::io::stdout(), &data)?;
             }
-        }
+            Err(_) => {
+                eprintln!("no stdout captured");
+            }
+        },
 
-        "stderr" => {
-            match pack.stderr() {
-                Ok(data) => {
-                    std::io::Write::write_all(&mut std::io::stdout(), &data)?;
-                }
-                Err(_) => {
-                    eprintln!("no stderr captured");
-                }
+        "stderr" => match pack.stderr() {
+            Ok(data) => {
+                std::io::Write::write_all(&mut std::io::stdout(), &data)?;
             }
-        }
+            Err(_) => {
+                eprintln!("no stderr captured");
+            }
+        },
 
         "stats" => {
             let summary = pack.summary();
@@ -167,19 +163,13 @@ pub fn execute(pack_path: PathBuf, query: String) -> Result<()> {
     Ok(())
 }
 
-fn execute_raw_sql(
-    db: &crate::trace::db::TraceDb,
-    sql: &str,
-) -> Result<()> {
+fn execute_raw_sql(db: &crate::trace::db::TraceDb, sql: &str) -> Result<()> {
     let results = db.raw_query(sql)?;
     println!("{}", serde_json::to_string_pretty(&results)?);
     Ok(())
 }
 
-fn search_files(
-    db: &crate::trace::db::TraceDb,
-    pattern: &str,
-) -> Result<()> {
+fn search_files(db: &crate::trace::db::TraceDb, pattern: &str) -> Result<()> {
     let files = db.query_file_events()?;
     let results: Vec<serde_json::Value> = files
         .iter()
@@ -204,10 +194,7 @@ fn search_files(
     Ok(())
 }
 
-fn search_net(
-    db: &crate::trace::db::TraceDb,
-    pattern: &str,
-) -> Result<()> {
+fn search_net(db: &crate::trace::db::TraceDb, pattern: &str) -> Result<()> {
     let net = db.query_net_events()?;
     let results: Vec<serde_json::Value> = net
         .iter()

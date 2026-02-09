@@ -42,6 +42,7 @@ pub struct StatsSummary {
     pub stderr_bytes: u64,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn generate_summary(
     db: &TraceDb,
     run_info: &RunInfo,
@@ -86,10 +87,7 @@ pub fn generate_summary(
             } else {
                 Some(FailureSummary {
                     kind: "non_zero_exit".into(),
-                    description: format!(
-                        "Process exited with code {}",
-                        exit_code.unwrap_or(-1)
-                    ),
+                    description: format!("Process exited with code {}", exit_code.unwrap_or(-1)),
                     primary_pid: None,
                 })
             }

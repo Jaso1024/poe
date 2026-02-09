@@ -14,8 +14,7 @@ pub struct MemoryMapping {
 
 pub fn read_maps(pid: i32) -> Result<Vec<MemoryMapping>> {
     let path = format!("/proc/{}/maps", pid);
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path))?;
+    let content = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path))?;
 
     let mut mappings = Vec::new();
     for line in content.lines() {
@@ -51,8 +50,7 @@ fn parse_maps_line(line: &str) -> Option<MemoryMapping> {
 
 pub fn read_cmdline(pid: i32) -> Result<Vec<String>> {
     let path = format!("/proc/{}/cmdline", pid);
-    let content = fs::read(&path)
-        .with_context(|| format!("failed to read {}", path))?;
+    let content = fs::read(&path).with_context(|| format!("failed to read {}", path))?;
 
     Ok(content
         .split(|&b| b == 0)
@@ -63,15 +61,13 @@ pub fn read_cmdline(pid: i32) -> Result<Vec<String>> {
 
 pub fn read_cwd(pid: i32) -> Result<String> {
     let path = format!("/proc/{}/cwd", pid);
-    let target = fs::read_link(&path)
-        .with_context(|| format!("failed to readlink {}", path))?;
+    let target = fs::read_link(&path).with_context(|| format!("failed to readlink {}", path))?;
     Ok(target.to_string_lossy().into_owned())
 }
 
 pub fn read_environ(pid: i32) -> Result<HashMap<String, String>> {
     let path = format!("/proc/{}/environ", pid);
-    let content = fs::read(&path)
-        .with_context(|| format!("failed to read {}", path))?;
+    let content = fs::read(&path).with_context(|| format!("failed to read {}", path))?;
 
     let mut env = HashMap::new();
     for entry in content.split(|&b| b == 0) {
@@ -88,15 +84,13 @@ pub fn read_environ(pid: i32) -> Result<HashMap<String, String>> {
 
 pub fn read_exe(pid: i32) -> Result<String> {
     let path = format!("/proc/{}/exe", pid);
-    let target = fs::read_link(&path)
-        .with_context(|| format!("failed to readlink {}", path))?;
+    let target = fs::read_link(&path).with_context(|| format!("failed to readlink {}", path))?;
     Ok(target.to_string_lossy().into_owned())
 }
 
 pub fn read_status_field(pid: i32, field: &str) -> Result<String> {
     let path = format!("/proc/{}/status", pid);
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path))?;
+    let content = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path))?;
 
     for line in content.lines() {
         if let Some(value) = line.strip_prefix(field) {

@@ -196,14 +196,8 @@ fn diff_files(bdb: &TraceDb, cdb: &TraceDb) -> Result<FileDiff> {
     let bf = bdb.query_file_events()?;
     let cf = cdb.query_file_events()?;
 
-    let b_paths: HashSet<String> = bf
-        .iter()
-        .filter_map(|f| f.path.clone())
-        .collect();
-    let c_paths: HashSet<String> = cf
-        .iter()
-        .filter_map(|f| f.path.clone())
-        .collect();
+    let b_paths: HashSet<String> = bf.iter().filter_map(|f| f.path.clone()).collect();
+    let c_paths: HashSet<String> = cf.iter().filter_map(|f| f.path.clone()).collect();
 
     let new_paths: Vec<String> = c_paths
         .difference(&b_paths)

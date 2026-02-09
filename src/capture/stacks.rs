@@ -148,7 +148,7 @@ impl StackSampler {
     }
 
     pub fn stop(&mut self) {
-        for (_, perf_fd) in &self.events {
+        for perf_fd in self.events.values() {
             unsafe {
                 libc::ioctl(perf_fd.fd, PERF_EVENT_IOC_DISABLE, 0);
             }
@@ -277,7 +277,9 @@ fn read_perf_samples(perf_fd: &mut PerfEventFd, base_ts: u64) -> Vec<RawSample> 
         }
 
         if ev_header.type_ == PERF_RECORD_SAMPLE {
-            if let Some(sample) = parse_sample_record(data_base, offset, record_size, data_size, base_ts) {
+            if let Some(sample) =
+                parse_sample_record(data_base, offset, record_size, data_size, base_ts)
+            {
                 samples.push(sample);
             }
         }
@@ -304,9 +306,9 @@ fn parse_sample_record(
     let header_size = std::mem::size_of::<PerfEventHeader>();
 
     let mut record_data = vec![0u8; record_size];
-    for i in 0..record_size {
+    for (i, byte) in record_data.iter_mut().enumerate() {
         let pos = (offset + i) % data_size;
-        record_data[i] = unsafe { *data_base.add(pos) };
+        *byte = unsafe { *data_base.add(pos) };
     }
 
     let body = &record_data[header_size..];

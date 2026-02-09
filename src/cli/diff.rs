@@ -34,12 +34,8 @@ pub fn print_diff(output: &diff::DiffOutput) {
         println!("{}", "--- exit code changed ---".red().bold());
         println!(
             "  baseline: {}  candidate: {}",
-            ec.baseline
-                .map(|c| c.to_string())
-                .unwrap_or("none".into()),
-            ec.candidate
-                .map(|c| c.to_string())
-                .unwrap_or("none".into()),
+            ec.baseline.map(|c| c.to_string()).unwrap_or("none".into()),
+            ec.candidate.map(|c| c.to_string()).unwrap_or("none".into()),
         );
         println!();
     }
@@ -85,10 +81,7 @@ pub fn print_diff(output: &diff::DiffOutput) {
             || !p.missing_processes.is_empty()
         {
             println!("{}", "--- process changes ---".yellow().bold());
-            println!(
-                "  {} -> {} processes",
-                p.baseline_count, p.candidate_count
-            );
+            println!("  {} -> {} processes", p.baseline_count, p.candidate_count);
             for proc in &p.new_processes {
                 println!("  {} {}", "+".green(), proc);
             }
@@ -123,11 +116,7 @@ pub fn print_diff(output: &diff::DiffOutput) {
                     println!("    {} {}", "+".green(), path);
                 }
                 if f.new_paths.len() > 10 {
-                    println!(
-                        "    {} ...and {} more",
-                        "+".green(),
-                        f.new_paths.len() - 10
-                    );
+                    println!("    {} ...and {} more", "+".green(), f.new_paths.len() - 10);
                 }
             }
             if !f.missing_paths.is_empty() {
@@ -210,7 +199,10 @@ pub fn print_diff(output: &diff::DiffOutput) {
         && output.file_diff.new_errors.is_empty()
         && output.net_diff.new_errors.is_empty()
     {
-        println!("{}", "No significant behavioral divergence detected.".green());
+        println!(
+            "{}",
+            "No significant behavioral divergence detected.".green()
+        );
         println!();
     }
 

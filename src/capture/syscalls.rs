@@ -126,12 +126,36 @@ pub fn syscall_name(nr: u64) -> &'static str {
 pub fn is_file_syscall(nr: u64) -> bool {
     matches!(
         nr,
-        SYS_READ | SYS_WRITE | SYS_OPEN | SYS_CLOSE | SYS_STAT | SYS_FSTAT
-            | SYS_LSTAT | SYS_PREAD64 | SYS_PWRITE64 | SYS_READV | SYS_WRITEV
-            | SYS_TRUNCATE | SYS_FTRUNCATE | SYS_RENAME | SYS_MKDIR | SYS_RMDIR
-            | SYS_CREAT | SYS_LINK | SYS_UNLINK | SYS_SYMLINK | SYS_READLINK
-            | SYS_CHMOD | SYS_CHOWN | SYS_OPENAT | SYS_MKDIRAT | SYS_UNLINKAT
-            | SYS_RENAMEAT | SYS_FCHMODAT | SYS_FACCESSAT | SYS_RENAMEAT2
+        SYS_READ
+            | SYS_WRITE
+            | SYS_OPEN
+            | SYS_CLOSE
+            | SYS_STAT
+            | SYS_FSTAT
+            | SYS_LSTAT
+            | SYS_PREAD64
+            | SYS_PWRITE64
+            | SYS_READV
+            | SYS_WRITEV
+            | SYS_TRUNCATE
+            | SYS_FTRUNCATE
+            | SYS_RENAME
+            | SYS_MKDIR
+            | SYS_RMDIR
+            | SYS_CREAT
+            | SYS_LINK
+            | SYS_UNLINK
+            | SYS_SYMLINK
+            | SYS_READLINK
+            | SYS_CHMOD
+            | SYS_CHOWN
+            | SYS_OPENAT
+            | SYS_MKDIRAT
+            | SYS_UNLINKAT
+            | SYS_RENAMEAT
+            | SYS_FCHMODAT
+            | SYS_FACCESSAT
+            | SYS_RENAMEAT2
             | SYS_NEWFSTATAT
     )
 }
@@ -139,9 +163,20 @@ pub fn is_file_syscall(nr: u64) -> bool {
 pub fn is_net_syscall(nr: u64) -> bool {
     matches!(
         nr,
-        SYS_SOCKET | SYS_CONNECT | SYS_ACCEPT | SYS_SENDTO | SYS_RECVFROM
-            | SYS_SENDMSG | SYS_RECVMSG | SYS_SHUTDOWN | SYS_BIND | SYS_LISTEN
-            | SYS_GETSOCKNAME | SYS_GETPEERNAME | SYS_SOCKETPAIR | SYS_ACCEPT4
+        SYS_SOCKET
+            | SYS_CONNECT
+            | SYS_ACCEPT
+            | SYS_SENDTO
+            | SYS_RECVFROM
+            | SYS_SENDMSG
+            | SYS_RECVMSG
+            | SYS_SHUTDOWN
+            | SYS_BIND
+            | SYS_LISTEN
+            | SYS_GETSOCKNAME
+            | SYS_GETPEERNAME
+            | SYS_SOCKETPAIR
+            | SYS_ACCEPT4
     )
 }
 
@@ -152,8 +187,7 @@ pub fn is_interesting_syscall(nr: u64) -> bool {
 pub fn is_process_syscall(nr: u64) -> bool {
     matches!(
         nr,
-        SYS_CLONE | SYS_FORK | SYS_VFORK | SYS_EXECVE | SYS_EXIT
-            | SYS_EXIT_GROUP | SYS_EXECVEAT
+        SYS_CLONE | SYS_FORK | SYS_VFORK | SYS_EXECVE | SYS_EXIT | SYS_EXIT_GROUP | SYS_EXECVEAT
     )
 }
 
@@ -173,6 +207,12 @@ pub enum DecodedSyscall {
 }
 
 pub struct SyscallDecoder;
+
+impl Default for SyscallDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SyscallDecoder {
     pub fn new() -> Self {
@@ -194,7 +234,7 @@ impl SyscallDecoder {
             SYS_OPEN | SYS_CREAT => {
                 let path = path_reader(args[0]);
                 SyscallEntryInfo::File {
-                    op: if nr == SYS_CREAT { FileOpKind::Open } else { FileOpKind::Open },
+                    op: FileOpKind::Open,
                     path,
                     fd: None,
                     flags: Some(args[1] as i32),
@@ -508,11 +548,21 @@ impl SyscallDecoder {
         ret: i64,
         nr: u64,
     ) -> Option<FileEvent> {
-        if let SyscallEntryInfo::File { op, path, fd, flags, ts } = entry {
+        if let SyscallEntryInfo::File {
+            op,
+            path,
+            fd,
+            flags,
+            ts,
+        } = entry
+        {
             let bytes = match nr {
-                SYS_READ | SYS_PREAD64 | SYS_READV
-                | SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV => {
-                    if ret >= 0 { Some(ret as u64) } else { None }
+                SYS_READ | SYS_PREAD64 | SYS_READV | SYS_WRITE | SYS_PWRITE64 | SYS_WRITEV => {
+                    if ret >= 0 {
+                        Some(ret as u64)
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             };
@@ -524,7 +574,11 @@ impl SyscallDecoder {
                 path: path.clone(),
                 fd: match nr {
                     SYS_OPEN | SYS_OPENAT | SYS_CREAT => {
-                        if ret >= 0 { Some(ret as i32) } else { *fd }
+                        if ret >= 0 {
+                            Some(ret as i32)
+                        } else {
+                            *fd
+                        }
                     }
                     _ => *fd,
                 },
@@ -545,28 +599,48 @@ impl SyscallDecoder {
         nr: u64,
         args: [u64; 6],
     ) -> Option<NetEvent> {
-        if let SyscallEntryInfo::Net { op, proto, addr, ts } = entry {
+        if let SyscallEntryInfo::Net {
+            op,
+            proto,
+            addr,
+            ts,
+        } = entry
+        {
             let bytes = match nr {
                 SYS_SENDTO | SYS_SENDMSG => {
-                    if ret >= 0 { Some(ret as u64) } else { None }
+                    if ret >= 0 {
+                        Some(ret as u64)
+                    } else {
+                        None
+                    }
                 }
                 SYS_RECVFROM | SYS_RECVMSG => {
-                    if ret >= 0 { Some(ret as u64) } else { None }
+                    if ret >= 0 {
+                        Some(ret as u64)
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             };
 
             let fd = match nr {
                 SYS_SOCKET => {
-                    if ret >= 0 { Some(ret as i32) } else { None }
+                    if ret >= 0 {
+                        Some(ret as i32)
+                    } else {
+                        None
+                    }
                 }
                 SYS_ACCEPT | SYS_ACCEPT4 => {
-                    if ret >= 0 { Some(ret as i32) } else { None }
+                    if ret >= 0 {
+                        Some(ret as i32)
+                    } else {
+                        None
+                    }
                 }
-                SYS_CONNECT | SYS_BIND | SYS_LISTEN | SYS_SHUTDOWN
-                | SYS_SENDTO | SYS_RECVFROM | SYS_SENDMSG | SYS_RECVMSG => {
-                    Some(args[0] as i32)
-                }
+                SYS_CONNECT | SYS_BIND | SYS_LISTEN | SYS_SHUTDOWN | SYS_SENDTO | SYS_RECVFROM
+                | SYS_SENDMSG | SYS_RECVMSG => Some(args[0] as i32),
                 _ => None,
             };
 
@@ -653,7 +727,10 @@ fn decode_sockaddr(
         libc::AF_UNIX => {
             if data.len() > 2 {
                 let path_bytes = &data[2..];
-                let end = path_bytes.iter().position(|&b| b == 0).unwrap_or(path_bytes.len());
+                let end = path_bytes
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(path_bytes.len());
                 if end > 0 && path_bytes[0] == 0 {
                     Some(format!("@{}", String::from_utf8_lossy(&path_bytes[1..end])))
                 } else {

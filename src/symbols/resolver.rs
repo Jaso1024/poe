@@ -20,6 +20,12 @@ pub struct ResolvedSymbol {
     pub offset: u64,
 }
 
+impl Default for SymbolResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SymbolResolver {
     pub fn new() -> Self {
         Self {
@@ -50,9 +56,10 @@ impl SymbolResolver {
     }
 
     fn resolve_uncached(&self, addr: u64) -> Option<ResolvedSymbol> {
-        let mapping = self.mappings.iter().find(|m| {
-            addr >= m.start && addr < m.end && m.permissions.contains('x')
-        })?;
+        let mapping = self
+            .mappings
+            .iter()
+            .find(|m| addr >= m.start && addr < m.end && m.permissions.contains('x'))?;
 
         let module_path = mapping.path.as_ref()?;
 
@@ -133,31 +140,48 @@ fn resolve_elf_symbol(
             break;
         }
 
-        let sh_type = u32::from_le_bytes(
-            elf_data.get(sh_start + 4..sh_start + 8)?.try_into().ok()?
-        );
+        let sh_type =
+            u32::from_le_bytes(elf_data.get(sh_start + 4..sh_start + 8)?.try_into().ok()?);
 
         if sh_type == 2 || sh_type == 11 {
             symtab_offset = u64::from_le_bytes(
-                elf_data.get(sh_start + 24..sh_start + 32)?.try_into().ok()?
+                elf_data
+                    .get(sh_start + 24..sh_start + 32)?
+                    .try_into()
+                    .ok()?,
             );
             symtab_size = u64::from_le_bytes(
-                elf_data.get(sh_start + 32..sh_start + 40)?.try_into().ok()?
+                elf_data
+                    .get(sh_start + 32..sh_start + 40)?
+                    .try_into()
+                    .ok()?,
             );
             symtab_entsize = u64::from_le_bytes(
-                elf_data.get(sh_start + 56..sh_start + 64)?.try_into().ok()?
+                elf_data
+                    .get(sh_start + 56..sh_start + 64)?
+                    .try_into()
+                    .ok()?,
             );
 
             let strtab_idx = u32::from_le_bytes(
-                elf_data.get(sh_start + 40..sh_start + 44)?.try_into().ok()?
+                elf_data
+                    .get(sh_start + 40..sh_start + 44)?
+                    .try_into()
+                    .ok()?,
             ) as usize;
 
             let str_sh_start = e_shoff as usize + strtab_idx * e_shentsize;
             strtab_offset = u64::from_le_bytes(
-                elf_data.get(str_sh_start + 24..str_sh_start + 32)?.try_into().ok()?
+                elf_data
+                    .get(str_sh_start + 24..str_sh_start + 32)?
+                    .try_into()
+                    .ok()?,
             );
             _strtab_size = u64::from_le_bytes(
-                elf_data.get(str_sh_start + 32..str_sh_start + 40)?.try_into().ok()?
+                elf_data
+                    .get(str_sh_start + 32..str_sh_start + 40)?
+                    .try_into()
+                    .ok()?,
             );
 
             found_symtab = true;
@@ -183,15 +207,20 @@ fn resolve_elf_symbol(
             break;
         }
 
-        let st_name = u32::from_le_bytes(
-            elf_data.get(sym_start..sym_start + 4)?.try_into().ok()?
-        ) as usize;
+        let st_name =
+            u32::from_le_bytes(elf_data.get(sym_start..sym_start + 4)?.try_into().ok()?) as usize;
         let st_info = elf_data.get(sym_start + 4)?;
         let st_value = u64::from_le_bytes(
-            elf_data.get(sym_start + 8..sym_start + 16)?.try_into().ok()?
+            elf_data
+                .get(sym_start + 8..sym_start + 16)?
+                .try_into()
+                .ok()?,
         );
         let st_size = u64::from_le_bytes(
-            elf_data.get(sym_start + 16..sym_start + 24)?.try_into().ok()?
+            elf_data
+                .get(sym_start + 16..sym_start + 24)?
+                .try_into()
+                .ok()?,
         );
 
         let sym_type = st_info & 0xf;
@@ -214,7 +243,7 @@ fn resolve_elf_symbol(
                     .into_owned();
 
                 let distance = lookup_addr - st_value;
-                if best_match.as_ref().map_or(true, |(d, _)| distance < *d) {
+                if best_match.as_ref().is_none_or(|(d, _)| distance < *d) {
                     best_match = Some((distance, name));
                 }
             }
@@ -239,7 +268,10 @@ pub fn format_frame(sym: &Option<ResolvedSymbol>, addr: u64) -> String {
                 _ => String::new(),
             };
             if s.offset > 0 {
-                format!("{:#x}: {}+{:#x} [{}]{}", addr, s.function, s.offset, s.module, loc)
+                format!(
+                    "{:#x}: {}+{:#x} [{}]{}",
+                    addr, s.function, s.offset, s.module, loc
+                )
             } else {
                 format!("{:#x}: {} [{}]{}", addr, s.function, s.module, loc)
             }

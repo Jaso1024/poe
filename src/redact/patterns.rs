@@ -122,11 +122,7 @@ impl Redactor {
     pub fn redact_string(&self, s: &str) -> String {
         let mut result = s.to_string();
 
-        let bearer_patterns = [
-            "Bearer ",
-            "bearer ",
-            "BEARER ",
-        ];
+        let bearer_patterns = ["Bearer ", "bearer ", "BEARER "];
         for pattern in &bearer_patterns {
             let mut search_from = 0;
             while let Some(pos) = result[search_from..].find(pattern) {

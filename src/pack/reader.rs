@@ -16,8 +16,8 @@ pub struct PackReader {
 
 impl PackReader {
     pub fn open(path: &Path) -> Result<Self> {
-        let file = File::open(path)
-            .with_context(|| format!("failed to open pack: {}", path.display()))?;
+        let file =
+            File::open(path).with_context(|| format!("failed to open pack: {}", path.display()))?;
 
         let mut archive = ZipArchive::new(file)?;
 
@@ -28,17 +28,18 @@ impl PackReader {
         fs::create_dir_all(&work_dir)?;
 
         let summary = {
-            let mut entry = archive.by_name("summary.json")
+            let mut entry = archive
+                .by_name("summary.json")
                 .context("pack missing summary.json")?;
             let mut content = String::new();
             entry.read_to_string(&mut content)?;
-            serde_json::from_str::<PackSummary>(&content)
-                .context("invalid summary.json")?
+            serde_json::from_str::<PackSummary>(&content).context("invalid summary.json")?
         };
 
         let db_path = work_dir.join("trace.sqlite");
         {
-            let mut entry = archive.by_name("trace.sqlite")
+            let mut entry = archive
+                .by_name("trace.sqlite")
                 .context("pack missing trace.sqlite")?;
             let mut db_file = File::create(&db_path)?;
             std::io::copy(&mut entry, &mut db_file)?;
@@ -46,7 +47,11 @@ impl PackReader {
 
         let db = TraceDb::open(&db_path)?;
 
-        for name in ["artifacts/stdout.log", "artifacts/stderr.log", "meta/environment.json"] {
+        for name in [
+            "artifacts/stdout.log",
+            "artifacts/stderr.log",
+            "meta/environment.json",
+        ] {
             if let Ok(mut entry) = archive.by_name(name) {
                 let out_path = work_dir.join(name);
                 if let Some(parent) = out_path.parent() {

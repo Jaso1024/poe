@@ -3,3 +3,20 @@
 *.dbgpack
 .direnv/
 result
+
+# Editor/IDE
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+/runtime/*.o
+/runtime/*.so
+/poe-store/
