@@ -11,6 +11,7 @@ use crate::pack::summary;
 use crate::trace::db::TraceDb;
 use crate::util::ringbuf::ByteRing;
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_pack(
     output_path: &Path,
     db: &TraceDb,
@@ -26,8 +27,7 @@ pub fn write_pack(
         .with_context(|| format!("failed to create pack file: {}", output_path.display()))?;
 
     let mut zip = ZipWriter::new(file);
-    let options = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     let pack_summary = summary::generate_summary(
         db,
@@ -46,8 +46,8 @@ pub fn write_pack(
 
     let db_path = db.path()?;
     if !db_path.is_empty() && Path::new(&db_path).exists() {
-        let db_bytes = fs::read(&db_path)
-            .with_context(|| format!("failed to read trace db: {}", db_path))?;
+        let db_bytes =
+            fs::read(&db_path).with_context(|| format!("failed to read trace db: {}", db_path))?;
         zip.start_file("trace.sqlite", options)?;
         zip.write_all(&db_bytes)?;
     }
@@ -68,6 +68,8 @@ pub fn write_pack(
     let redactor = crate::redact::Redactor::new();
     let redacted_env = redactor.redact_env(&env);
 
+    let trace_ctx = crate::distributed::trace_context::TraceContext::from_env_or_new();
+
     let meta = serde_json::json!({
         "run_id": run_info.run_id,
         "git_sha": run_info.git_sha,
@@ -76,6 +78,12 @@ pub fn write_pack(
         "kernel": get_kernel_version(),
         "arch": std::env::consts::ARCH,
         "environment": redacted_env,
+        "trace_context": {
+            "trace_id": trace_ctx.trace_id,
+            "span_id": trace_ctx.span_id,
+            "parent_span_id": trace_ctx.parent_span_id,
+            "origin_host": trace_ctx.origin_host,
+        },
     });
 
     let meta_json = serde_json::to_string_pretty(&meta)?;
