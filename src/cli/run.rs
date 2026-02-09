@@ -34,6 +34,7 @@ pub fn execute(
         capture_mode,
         always_emit: force_always,
         output_dir,
+        diff_baseline: diff_baseline.clone(),
         ..Default::default()
     };
 
@@ -65,25 +66,49 @@ pub fn execute(
             "packet:".dimmed(),
             pack_path.display().to_string().cyan()
         );
-        eprintln!(
-            "  {} {}ms",
-            "duration:".dimmed(),
-            result.duration_ms
-        );
-        eprintln!(
-            "  {} poe explain {}",
-            "run:".dimmed(),
-            pack_path.display()
-        );
+        eprintln!("  {} {}ms", "duration:".dimmed(), result.duration_ms);
+        eprintln!("  {} poe explain {}", "run:".dimmed(), pack_path.display());
         eprintln!("{}", "------------------------".yellow().bold());
 
-        if let Some(ref baseline_path) = diff_baseline {
+        if !result.realtime_divergences.is_empty() {
             eprintln!();
-            let diff_result = explain::diff::diff_packs(baseline_path, pack_path)?;
-            crate::cli::diff::print_diff(&diff_result);
+            eprintln!("{}", "--- realtime divergence detected ---".red().bold());
+            for (i, div) in result.realtime_divergences.iter().enumerate().take(10) {
+                eprintln!("  {:>8.2}ms {:?}: {}", div.ts_ms, div.kind, div.description,);
+                if i == 0 {
+                    eprintln!(
+                        "  {} this is the first behavioral divergence from baseline",
+                        "^^".yellow().bold()
+                    );
+                }
+            }
+            if result.realtime_divergences.len() > 10 {
+                eprintln!(
+                    "  ... and {} more divergences",
+                    result.realtime_divergences.len() - 10
+                );
+            }
+            eprintln!("{}", "------------------------------------".red().bold());
+        }
+
+        if let Some(ref baseline_path) = diff_baseline {
+            if baseline_path.exists() {
+                eprintln!();
+                let diff_result = explain::diff::diff_packs(baseline_path, pack_path)?;
+                crate::cli::diff::print_diff(&diff_result);
+            } else {
+                eprintln!(
+                    "poe: skipping diff -- baseline not found: {}",
+                    baseline_path.display()
+                );
+            }
         }
     }
 
-    let exit_code = result.exit_code.unwrap_or(if result.signal.is_some() { 128 + result.signal.unwrap_or(0) } else { 1 });
+    let exit_code = result.exit_code.unwrap_or(if result.signal.is_some() {
+        128 + result.signal.unwrap_or(0)
+    } else {
+        1
+    });
     process::exit(exit_code);
 }
