@@ -29,6 +29,8 @@ pub struct TracerConfig {
     pub capture_mode: CaptureMode,
     pub stdout_fd: Option<RawFd>,
     pub stderr_fd: Option<RawFd>,
+    pub env_overrides: HashMap<String, String>,
+    pub clear_cloexec_fds: Vec<RawFd>,
 }
 
 pub struct Tracer {
@@ -68,6 +70,8 @@ impl Tracer {
 
         let stdout_fd = self.config.stdout_fd;
         let stderr_fd = self.config.stderr_fd;
+        let env_overrides = self.config.env_overrides.clone();
+        let clear_cloexec_fds = self.config.clear_cloexec_fds.clone();
 
         let fork_result = unsafe { nix::unistd::fork() }?;
 
@@ -80,6 +84,19 @@ impl Tracer {
                 if let Some(fd) = stderr_fd {
                     nix::unistd::dup2(fd, 2).ok();
                     nix::unistd::close(fd).ok();
+                }
+
+                for fd in &clear_cloexec_fds {
+                    unsafe {
+                        let flags = libc::fcntl(*fd, libc::F_GETFD);
+                        if flags >= 0 {
+                            libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+                        }
+                    }
+                }
+
+                for (key, val) in &env_overrides {
+                    std::env::set_var(key, val);
                 }
 
                 ptrace::traceme().expect("PTRACE_TRACEME failed");
@@ -118,11 +135,14 @@ impl Tracer {
                     start_ts: 0,
                 };
 
-                self.processes.insert(raw_pid, TracedProcess {
-                    pid: child,
-                    pending_syscall: None,
-                    alive: true,
-                });
+                self.processes.insert(
+                    raw_pid,
+                    TracedProcess {
+                        pid: child,
+                        pending_syscall: None,
+                        alive: true,
+                    },
+                );
 
                 let _ = self.event_tx.send(TraceEvent::Process(proc_info));
 
@@ -134,7 +154,9 @@ impl Tracer {
     }
 
     pub fn run_event_loop(&mut self) -> Result<(Option<i32>, Option<i32>)> {
-        let root_pid = self.root_pid.ok_or_else(|| anyhow::anyhow!("no root process"))?;
+        let root_pid = self
+            .root_pid
+            .ok_or_else(|| anyhow::anyhow!("no root process"))?;
         let mut root_exit_code: Option<i32> = None;
         let mut root_signal: Option<i32> = None;
 
@@ -148,14 +170,14 @@ impl Tracer {
             match status {
                 WaitStatus::PtraceSyscall(pid) => {
                     self.handle_syscall(pid)?;
-                    if let Err(_) = ptrace::syscall(pid, None) {
+                    if ptrace::syscall(pid, None).is_err() {
                         self.mark_dead(pid.as_raw());
                     }
                 }
 
                 WaitStatus::PtraceEvent(pid, _sig, event) => {
                     self.handle_ptrace_event(pid, event)?;
-                    if let Err(_) = ptrace::syscall(pid, None) {
+                    if ptrace::syscall(pid, None).is_err() {
                         self.mark_dead(pid.as_raw());
                     }
                 }
@@ -193,11 +215,7 @@ impl Tracer {
                         ts,
                         proc_id: pid.as_raw(),
                         kind: EventKind::Signal,
-                        detail: format!(
-                            "killed by {} ({})",
-                            util::signal_name(sig_num),
-                            sig_num
-                        ),
+                        detail: format!("killed by {} ({})", util::signal_name(sig_num), sig_num),
                     }));
 
                     self.mark_dead(pid.as_raw());
@@ -225,11 +243,8 @@ impl Tracer {
                                     | Signal::SIGABRT
                             );
 
-                            let mut detail = format!(
-                                "received {} ({})",
-                                util::signal_name(sig_num),
-                                sig_num
-                            );
+                            let mut detail =
+                                format!("received {} ({})", util::signal_name(sig_num), sig_num);
 
                             if is_crash {
                                 if let Ok(regs) = ptrace::getregs(pid) {
@@ -261,7 +276,7 @@ impl Tracer {
                             Some(sig)
                         }
                     };
-                    if let Err(_) = ptrace::syscall(pid, deliver) {
+                    if ptrace::syscall(pid, deliver).is_err() {
                         self.mark_dead(pid.as_raw());
                     }
                 }
@@ -295,17 +310,16 @@ impl Tracer {
             let args = [regs.rdi, regs.rsi, regs.rdx, regs.r10, regs.r8, regs.r9];
 
             if is_interesting_syscall(nr) {
-                let path_reader = |addr: u64| -> Option<String> {
-                    read_string_from_process(pid, addr, 4096)
-                };
+                let path_reader =
+                    |addr: u64| -> Option<String> { read_string_from_process(pid, addr, 4096) };
                 let addr_reader = |addr: u64, len: usize| -> Option<Vec<u8>> {
                     read_bytes_from_process(pid, addr, len)
                 };
 
                 let ts = self.relative_ts();
-                let entry_info = self.decoder.decode_entry(
-                    raw, ts, nr, args, &path_reader, &addr_reader,
-                );
+                let entry_info =
+                    self.decoder
+                        .decode_entry(raw, ts, nr, args, &path_reader, &addr_reader);
 
                 if let Some(proc) = self.processes.get_mut(&raw) {
                     proc.pending_syscall = Some(PendingSyscall {
@@ -355,9 +369,7 @@ impl Tracer {
         let ts = self.relative_ts();
 
         match event {
-            libc::PTRACE_EVENT_FORK
-            | libc::PTRACE_EVENT_VFORK
-            | libc::PTRACE_EVENT_CLONE => {
+            libc::PTRACE_EVENT_FORK | libc::PTRACE_EVENT_VFORK | libc::PTRACE_EVENT_CLONE => {
                 let new_pid_raw = ptrace::getevent(pid)? as i32;
                 let new_pid = Pid::from_raw(new_pid_raw);
 
@@ -375,11 +387,14 @@ impl Tracer {
                 let cwd = util::procfs::read_cwd(new_pid_raw).unwrap_or_default();
                 let cmdline = util::procfs::read_cmdline(new_pid_raw).unwrap_or_default();
 
-                self.processes.insert(new_pid_raw, TracedProcess {
-                    pid: new_pid,
-                    pending_syscall: None,
-                    alive: true,
-                });
+                self.processes.insert(
+                    new_pid_raw,
+                    TracedProcess {
+                        pid: new_pid,
+                        pending_syscall: None,
+                        alive: true,
+                    },
+                );
 
                 let _ = self.event_tx.send(TraceEvent::Process(ProcessInfo {
                     proc_id: new_pid_raw,
@@ -473,16 +488,7 @@ fn read_string_from_process(pid: Pid, addr: u64, max_len: usize) -> Option<Strin
         iov_len: max_len,
     };
 
-    let n = unsafe {
-        libc::process_vm_readv(
-            pid.as_raw(),
-            &local_iov,
-            1,
-            &remote_iov,
-            1,
-            0,
-        )
-    };
+    let n = unsafe { libc::process_vm_readv(pid.as_raw(), &local_iov, 1, &remote_iov, 1, 0) };
 
     if n <= 0 {
         return read_string_ptrace(pid, addr, max_len.min(256));
@@ -533,16 +539,7 @@ fn read_bytes_from_process(pid: Pid, addr: u64, len: usize) -> Option<Vec<u8>> {
         iov_len: len,
     };
 
-    let n = unsafe {
-        libc::process_vm_readv(
-            pid.as_raw(),
-            &local_iov,
-            1,
-            &remote_iov,
-            1,
-            0,
-        )
-    };
+    let n = unsafe { libc::process_vm_readv(pid.as_raw(), &local_iov, 1, &remote_iov, 1, 0) };
 
     if n <= 0 {
         return read_bytes_ptrace(pid, addr, len);

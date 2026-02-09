@@ -37,8 +37,7 @@ CREATE TABLE IF NOT EXISTS events (
     ts INTEGER NOT NULL,
     proc_id INTEGER NOT NULL,
     kind TEXT NOT NULL,
-    detail TEXT,
-    FOREIGN KEY (proc_id) REFERENCES processes(proc_id)
+    detail TEXT
 );
 
 CREATE TABLE IF NOT EXISTS files (
@@ -301,7 +300,14 @@ impl TraceDb {
         Ok(())
     }
 
-    pub fn insert_artifact(&self, id: &str, kind: &str, path: &str, hash: Option<&str>, size: Option<u64>) -> Result<()> {
+    pub fn insert_artifact(
+        &self,
+        id: &str,
+        kind: &str,
+        path: &str,
+        hash: Option<&str>,
+        size: Option<u64>,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO artifacts (artifact_id, kind, path, content_hash, size)
@@ -334,7 +340,12 @@ impl TraceDb {
                     tx.execute(
                         "UPDATE processes SET end_ts = ?1, exit_code = ?2, signal = ?3
                          WHERE proc_id = ?4",
-                        params![exit.end_ts as i64, exit.exit_code, exit.signal, exit.proc_id],
+                        params![
+                            exit.end_ts as i64,
+                            exit.exit_code,
+                            exit.signal,
+                            exit.proc_id
+                        ],
                     )?;
                 }
                 TraceEvent::File(f) => {
@@ -342,8 +353,14 @@ impl TraceDb {
                         "INSERT INTO files (ts, proc_id, op, path, fd, bytes, flags, result)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                         params![
-                            f.ts as i64, f.proc_id, f.op.as_str(), f.path, f.fd,
-                            f.bytes.map(|b| b as i64), f.flags, f.result,
+                            f.ts as i64,
+                            f.proc_id,
+                            f.op.as_str(),
+                            f.path,
+                            f.fd,
+                            f.bytes.map(|b| b as i64),
+                            f.flags,
+                            f.result,
                         ],
                     )?;
                 }
@@ -352,8 +369,15 @@ impl TraceDb {
                         "INSERT INTO net (ts, proc_id, op, proto, src, dst, bytes, fd, result)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                         params![
-                            n.ts as i64, n.proc_id, n.op.as_str(), n.proto, n.src, n.dst,
-                            n.bytes.map(|b| b as i64), n.fd, n.result,
+                            n.ts as i64,
+                            n.proc_id,
+                            n.op.as_str(),
+                            n.proto,
+                            n.src,
+                            n.dst,
+                            n.bytes.map(|b| b as i64),
+                            n.fd,
+                            n.result,
                         ],
                     )?;
                 }
@@ -391,24 +415,26 @@ impl TraceDb {
         let mut stmt = conn.prepare(
             "SELECT run_id, command, working_dir, env_hash, start_time, end_time,
                     git_sha, hostname, exit_code, signal, trigger_reason
-             FROM run LIMIT 1"
+             FROM run LIMIT 1",
         )?;
 
-        let result = stmt.query_row([], |row| {
-            Ok(RunQueryResult {
-                run_id: row.get(0)?,
-                command: row.get(1)?,
-                working_dir: row.get(2)?,
-                env_hash: row.get(3)?,
-                start_time: row.get(4)?,
-                end_time: row.get(5)?,
-                git_sha: row.get(6)?,
-                hostname: row.get(7)?,
-                exit_code: row.get(8)?,
-                signal: row.get(9)?,
-                trigger_reason: row.get(10)?,
+        let result = stmt
+            .query_row([], |row| {
+                Ok(RunQueryResult {
+                    run_id: row.get(0)?,
+                    command: row.get(1)?,
+                    working_dir: row.get(2)?,
+                    env_hash: row.get(3)?,
+                    start_time: row.get(4)?,
+                    end_time: row.get(5)?,
+                    git_sha: row.get(6)?,
+                    hostname: row.get(7)?,
+                    exit_code: row.get(8)?,
+                    signal: row.get(9)?,
+                    trigger_reason: row.get(10)?,
+                })
             })
-        }).optional()?;
+            .optional()?;
 
         Ok(result)
     }
@@ -417,39 +443,42 @@ impl TraceDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT proc_id, parent_proc_id, argv, cwd, start_ts, end_ts, exit_code, signal
-             FROM processes ORDER BY start_ts"
+             FROM processes ORDER BY start_ts",
         )?;
 
-        let results = stmt.query_map([], |row| {
-            Ok(ProcessQueryResult {
-                proc_id: row.get(0)?,
-                parent_proc_id: row.get(1)?,
-                argv: row.get(2)?,
-                cwd: row.get(3)?,
-                start_ts: row.get(4)?,
-                end_ts: row.get(5)?,
-                exit_code: row.get(6)?,
-                signal: row.get(7)?,
-            })
-        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map([], |row| {
+                Ok(ProcessQueryResult {
+                    proc_id: row.get(0)?,
+                    parent_proc_id: row.get(1)?,
+                    argv: row.get(2)?,
+                    cwd: row.get(3)?,
+                    start_ts: row.get(4)?,
+                    end_ts: row.get(5)?,
+                    exit_code: row.get(6)?,
+                    signal: row.get(7)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
 
     pub fn query_last_events(&self, limit: usize) -> Result<Vec<EventQueryResult>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT ts, proc_id, kind, detail FROM events ORDER BY ts DESC LIMIT ?1"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT ts, proc_id, kind, detail FROM events ORDER BY ts DESC LIMIT ?1")?;
 
-        let results = stmt.query_map(params![limit as i64], |row| {
-            Ok(EventQueryResult {
-                ts: row.get(0)?,
-                proc_id: row.get(1)?,
-                kind: row.get(2)?,
-                detail: row.get(3)?,
-            })
-        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(EventQueryResult {
+                    ts: row.get(0)?,
+                    proc_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    detail: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
@@ -458,21 +487,23 @@ impl TraceDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT ts, proc_id, op, path, fd, bytes, flags, result
-             FROM files ORDER BY ts"
+             FROM files ORDER BY ts",
         )?;
 
-        let results = stmt.query_map([], |row| {
-            Ok(FileQueryResult {
-                ts: row.get(0)?,
-                proc_id: row.get(1)?,
-                op: row.get(2)?,
-                path: row.get(3)?,
-                fd: row.get(4)?,
-                bytes: row.get(5)?,
-                flags: row.get(6)?,
-                result: row.get(7)?,
-            })
-        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map([], |row| {
+                Ok(FileQueryResult {
+                    ts: row.get(0)?,
+                    proc_id: row.get(1)?,
+                    op: row.get(2)?,
+                    path: row.get(3)?,
+                    fd: row.get(4)?,
+                    bytes: row.get(5)?,
+                    flags: row.get(6)?,
+                    result: row.get(7)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
@@ -481,49 +512,50 @@ impl TraceDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT ts, proc_id, op, proto, src, dst, bytes, fd, result
-             FROM net ORDER BY ts"
+             FROM net ORDER BY ts",
         )?;
 
-        let results = stmt.query_map([], |row| {
-            Ok(NetQueryResult {
-                ts: row.get(0)?,
-                proc_id: row.get(1)?,
-                op: row.get(2)?,
-                proto: row.get(3)?,
-                src: row.get(4)?,
-                dst: row.get(5)?,
-                bytes: row.get(6)?,
-                fd: row.get(7)?,
-                result: row.get(8)?,
-            })
-        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map([], |row| {
+                Ok(NetQueryResult {
+                    ts: row.get(0)?,
+                    proc_id: row.get(1)?,
+                    op: row.get(2)?,
+                    proto: row.get(3)?,
+                    src: row.get(4)?,
+                    dst: row.get(5)?,
+                    bytes: row.get(6)?,
+                    fd: row.get(7)?,
+                    result: row.get(8)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
 
     pub fn query_stacks(&self) -> Result<Vec<StackQueryResult>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT ts, proc_id, frames, weight FROM stacks ORDER BY ts"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT ts, proc_id, frames, weight FROM stacks ORDER BY ts")?;
 
-        let results = stmt.query_map([], |row| {
-            Ok(StackQueryResult {
-                ts: row.get(0)?,
-                proc_id: row.get(1)?,
-                frames: row.get(2)?,
-                weight: row.get(3)?,
-            })
-        })?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let results = stmt
+            .query_map([], |row| {
+                Ok(StackQueryResult {
+                    ts: row.get(0)?,
+                    proc_id: row.get(1)?,
+                    frames: row.get(2)?,
+                    weight: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(results)
     }
 
     pub fn query_stdio(&self, stream: &str) -> Result<Vec<u8>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT data FROM stdio WHERE stream = ?1 ORDER BY ts"
-        )?;
+        let mut stmt = conn.prepare("SELECT data FROM stdio WHERE stream = ?1 ORDER BY ts")?;
 
         let mut all_data = Vec::new();
         let rows = stmt.query_map(params![stream], |row| {
@@ -570,11 +602,7 @@ impl TraceDb {
     pub fn raw_query(&self, sql: &str) -> Result<Vec<serde_json::Value>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(sql)?;
-        let column_names: Vec<String> = stmt
-            .column_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let column_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
         let rows = stmt.query_map([], |row| {
             let mut map = serde_json::Map::new();
@@ -600,6 +628,44 @@ impl TraceDb {
             results.push(row?);
         }
         Ok(results)
+    }
+
+    pub fn query_python_events(&self, kind: &str) -> Result<Vec<EventQueryResult>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT ts, proc_id, kind, detail FROM events WHERE kind = ?1 ORDER BY ts")?;
+
+        let results = stmt
+            .query_map(params![kind], |row| {
+                Ok(EventQueryResult {
+                    ts: row.get(0)?,
+                    proc_id: row.get(1)?,
+                    kind: row.get(2)?,
+                    detail: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(results)
+    }
+
+    pub fn query_python_unhandled_exceptions(&self) -> Result<Vec<EventQueryResult>> {
+        self.query_python_events("python_unhandled_exception")
+    }
+
+    pub fn query_python_exceptions(&self) -> Result<Vec<EventQueryResult>> {
+        self.query_python_events("python_exception")
+    }
+
+    pub fn has_python_events(&self) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE kind LIKE 'python_%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+            > 0
     }
 
     pub fn checkpoint(&self) -> Result<()> {

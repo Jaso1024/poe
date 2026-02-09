@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::hooks::rust as rust_hooks;
 use crate::pack::reader::PackReader;
 use crate::pack::summary::PackSummary;
 use crate::trace::db::*;
@@ -17,6 +18,8 @@ pub struct ExplainOutput {
     pub net_activity: NetActivitySummary,
     pub process_tree: Vec<ProcessNode>,
     pub error_patterns: Vec<ErrorPattern>,
+    pub python_exceptions: Vec<PythonExceptionInfo>,
+    pub rust_panic: Option<rust_hooks::RustPanicInfo>,
     pub stderr_tail: Option<String>,
     pub stdout_tail: Option<String>,
 }
@@ -117,6 +120,32 @@ pub struct ProcessNode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PythonExceptionInfo {
+    pub exc_type: String,
+    pub exc_msg: String,
+    pub traceback: Vec<PythonTraceFrame>,
+    pub chain: Vec<PythonChainEntry>,
+    pub locals_at_crash: Option<std::collections::HashMap<String, String>>,
+    pub formatted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PythonTraceFrame {
+    pub file: String,
+    pub line: u32,
+    pub func: String,
+    pub locals: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PythonChainEntry {
+    #[serde(rename = "type")]
+    pub exc_type: String,
+    pub msg: String,
+    pub cause: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorPattern {
     pub category: String,
     pub severity: String,
@@ -158,12 +187,24 @@ pub fn analyze(pack: &PackReader) -> Result<ExplainOutput> {
         }
     });
 
+    let python_exceptions = build_python_exceptions(db);
+
+    let full_stderr = pack
+        .stderr()
+        .ok()
+        .map(|d| String::from_utf8_lossy(&d).into_owned());
+    let rust_panic = full_stderr
+        .as_ref()
+        .and_then(|s| rust_hooks::parse_rust_panic(s));
+
     let error_patterns = detect_error_patterns(
         &failure,
         &file_activity,
         &net_activity,
         &process_tree,
         &stderr_tail,
+        &full_stderr,
+        &python_exceptions,
     );
 
     Ok(ExplainOutput {
@@ -174,6 +215,8 @@ pub fn analyze(pack: &PackReader) -> Result<ExplainOutput> {
         net_activity,
         process_tree,
         error_patterns,
+        python_exceptions,
+        rust_panic,
         stderr_tail,
         stdout_tail,
     })
@@ -205,9 +248,7 @@ fn build_process_tree(db: &TraceDb) -> Result<Vec<ProcessNode>> {
                 .unwrap_or_else(|| format!("pid:{}", p.proc_id));
 
             let duration_ms = match (p.end_ts, p.start_ts) {
-                (Some(end), start) if end > start => {
-                    Some((end - start) as f64 / 1_000_000.0)
-                }
+                (Some(end), start) if end > start => Some((end - start) as f64 / 1_000_000.0),
                 _ => None,
             };
 
@@ -231,16 +272,15 @@ fn build_timeline(db: &TraceDb, duration_ms: u64) -> Result<TimelineExplanation>
     let mut merged: Vec<TimelineEntry> = Vec::new();
 
     for e in last_events.iter().rev() {
-        merged.push(TimelineEntry {
-            ts_ms: e.ts as f64 / 1_000_000.0,
-            proc_id: e.proc_id,
-            kind: "event".into(),
-            description: format!(
-                "[{}] {}",
-                e.kind,
-                e.detail.as_deref().unwrap_or("")
-            ),
-        });
+        let desc = format_event_description(&e.kind, e.detail.as_deref().unwrap_or(""));
+        if !desc.is_empty() {
+            merged.push(TimelineEntry {
+                ts_ms: e.ts as f64 / 1_000_000.0,
+                proc_id: e.proc_id,
+                kind: "event".into(),
+                description: desc,
+            });
+        }
     }
 
     let file_tail: Vec<&FileQueryResult> = file_events.iter().rev().take(30).collect();
@@ -253,11 +293,17 @@ fn build_timeline(db: &TraceDb, duration_ms: u64) -> Result<TimelineExplanation>
             Some(r) => format!(" -> {}", r),
             None => String::new(),
         };
-        let bytes_str = f.bytes.map(|b| format!(" ({} bytes)", b)).unwrap_or_default();
+        let bytes_str = f
+            .bytes
+            .map(|b| format!(" ({} bytes)", b))
+            .unwrap_or_default();
         let desc = format!(
             "{}{}{}{}",
             f.op,
-            f.path.as_ref().map(|p| format!(" {}", p)).unwrap_or_default(),
+            f.path
+                .as_ref()
+                .map(|p| format!(" {}", p))
+                .unwrap_or_default(),
             bytes_str,
             result_str,
         );
@@ -277,11 +323,17 @@ fn build_timeline(db: &TraceDb, duration_ms: u64) -> Result<TimelineExplanation>
             Some(r) => format!(" -> {}", r),
             None => String::new(),
         };
-        let bytes_str = n.bytes.map(|b| format!(" ({} bytes)", b)).unwrap_or_default();
+        let bytes_str = n
+            .bytes
+            .map(|b| format!(" ({} bytes)", b))
+            .unwrap_or_default();
         let desc = format!(
             "{}{}{}{}",
             n.op,
-            n.dst.as_ref().map(|d| format!(" {}", d)).unwrap_or_default(),
+            n.dst
+                .as_ref()
+                .map(|d| format!(" {}", d))
+                .unwrap_or_default(),
             bytes_str,
             result_str,
         );
@@ -293,7 +345,11 @@ fn build_timeline(db: &TraceDb, duration_ms: u64) -> Result<TimelineExplanation>
         });
     }
 
-    merged.sort_by(|a, b| a.ts_ms.partial_cmp(&b.ts_ms).unwrap_or(std::cmp::Ordering::Equal));
+    merged.sort_by(|a, b| {
+        a.ts_ms
+            .partial_cmp(&b.ts_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     merged.truncate(50);
 
     let file_entries: Vec<TimelineEntry> = file_events
@@ -308,7 +364,10 @@ fn build_timeline(db: &TraceDb, duration_ms: u64) -> Result<TimelineExplanation>
                 Some(r) => format!(" -> {}", r),
                 None => String::new(),
             };
-            let bytes_str = f.bytes.map(|b| format!(" ({} bytes)", b)).unwrap_or_default();
+            let bytes_str = f
+                .bytes
+                .map(|b| format!(" ({} bytes)", b))
+                .unwrap_or_default();
             TimelineEntry {
                 ts_ms: f.ts as f64 / 1_000_000.0,
                 proc_id: f.proc_id,
@@ -316,7 +375,10 @@ fn build_timeline(db: &TraceDb, duration_ms: u64) -> Result<TimelineExplanation>
                 description: format!(
                     "{}{}{}{}",
                     f.op,
-                    f.path.as_ref().map(|p| format!(" {}", p)).unwrap_or_default(),
+                    f.path
+                        .as_ref()
+                        .map(|p| format!(" {}", p))
+                        .unwrap_or_default(),
                     bytes_str,
                     result_str,
                 ),
@@ -336,7 +398,10 @@ fn build_timeline(db: &TraceDb, duration_ms: u64) -> Result<TimelineExplanation>
                 Some(r) => format!(" -> {}", r),
                 None => String::new(),
             };
-            let bytes_str = n.bytes.map(|b| format!(" ({} bytes)", b)).unwrap_or_default();
+            let bytes_str = n
+                .bytes
+                .map(|b| format!(" ({} bytes)", b))
+                .unwrap_or_default();
             TimelineEntry {
                 ts_ms: n.ts as f64 / 1_000_000.0,
                 proc_id: n.proc_id,
@@ -344,7 +409,10 @@ fn build_timeline(db: &TraceDb, duration_ms: u64) -> Result<TimelineExplanation>
                 description: format!(
                     "{}{}{}{}",
                     n.op,
-                    n.dst.as_ref().map(|d| format!(" {}", d)).unwrap_or_default(),
+                    n.dst
+                        .as_ref()
+                        .map(|d| format!(" {}", d))
+                        .unwrap_or_default(),
                     bytes_str,
                     result_str,
                 ),
@@ -539,6 +607,8 @@ fn detect_error_patterns(
     net_activity: &NetActivitySummary,
     process_tree: &[ProcessNode],
     stderr_tail: &Option<String>,
+    full_stderr: &Option<String>,
+    python_exceptions: &[PythonExceptionInfo],
 ) -> Vec<ErrorPattern> {
     let mut patterns = Vec::new();
 
@@ -639,10 +709,8 @@ fn detect_error_patterns(
         });
     }
 
-    let killed_procs: Vec<&ProcessNode> = process_tree
-        .iter()
-        .filter(|p| p.signal.is_some())
-        .collect();
+    let killed_procs: Vec<&ProcessNode> =
+        process_tree.iter().filter(|p| p.signal.is_some()).collect();
     if killed_procs.len() > 1 {
         let examples: Vec<String> = killed_procs
             .iter()
@@ -659,11 +727,40 @@ fn detect_error_patterns(
         patterns.push(ErrorPattern {
             category: "multi_crash".into(),
             severity: "critical".into(),
-            description: format!(
-                "{} processes were killed by signals",
-                killed_procs.len()
-            ),
+            description: format!("{} processes were killed by signals", killed_procs.len()),
             count: killed_procs.len(),
+            examples,
+        });
+    }
+
+    if let Some(stderr) = full_stderr {
+        let rust_patterns = rust_hooks::detect_rust_patterns(stderr);
+        patterns.extend(rust_patterns);
+    }
+
+    if !python_exceptions.is_empty() {
+        let examples: Vec<String> = python_exceptions
+            .iter()
+            .take(3)
+            .map(|e| {
+                let loc = e
+                    .traceback
+                    .last()
+                    .map(|f| format!(" at {}:{} in {}", f.file, f.line, f.func))
+                    .unwrap_or_default();
+                format!(
+                    "{}: {}{}",
+                    e.exc_type,
+                    &e.exc_msg[..e.exc_msg.len().min(100)],
+                    loc
+                )
+            })
+            .collect();
+        patterns.push(ErrorPattern {
+            category: "python_exception".into(),
+            severity: "critical".into(),
+            description: format!("{} unhandled Python exception(s)", python_exceptions.len()),
+            count: python_exceptions.len(),
             examples,
         });
     }
@@ -678,7 +775,12 @@ fn detect_error_patterns(
 fn detect_stderr_patterns(stderr: &str, patterns: &mut Vec<ErrorPattern>) {
     let stderr_lower = stderr.to_lowercase();
 
-    let oom_keywords = ["out of memory", "oom", "cannot allocate memory", "alloc failed"];
+    let oom_keywords = [
+        "out of memory",
+        "oom",
+        "cannot allocate memory",
+        "alloc failed",
+    ];
     if oom_keywords.iter().any(|k| stderr_lower.contains(k)) {
         let example_line = stderr
             .lines()
@@ -715,13 +817,16 @@ fn detect_stderr_patterns(stderr: &str, patterns: &mut Vec<ErrorPattern>) {
     }
 
     let panic_indicators = [
-        "panic:", "panicked at", "traceback (most recent",
-        "unhandled exception", "fatal error", "segmentation fault",
-        "stack overflow", "uncaught exception",
+        "panic:",
+        "panicked at",
+        "traceback (most recent",
+        "unhandled exception",
+        "fatal error",
+        "segmentation fault",
+        "stack overflow",
+        "uncaught exception",
     ];
-    let found_panic = panic_indicators
-        .iter()
-        .find(|k| stderr_lower.contains(*k));
+    let found_panic = panic_indicators.iter().find(|k| stderr_lower.contains(*k));
     if let Some(keyword) = found_panic {
         let example_lines: Vec<String> = stderr
             .lines()
@@ -739,6 +844,44 @@ fn detect_stderr_patterns(stderr: &str, patterns: &mut Vec<ErrorPattern>) {
             });
         }
     }
+}
+
+fn build_python_exceptions(db: &crate::trace::TraceDb) -> Vec<PythonExceptionInfo> {
+    let events = db.query_python_unhandled_exceptions().unwrap_or_default();
+
+    events
+        .iter()
+        .filter_map(|e| {
+            let detail = e.detail.as_ref()?;
+            let parsed: serde_json::Value = serde_json::from_str(detail).ok()?;
+
+            let traceback: Vec<PythonTraceFrame> = parsed
+                .get("traceback")
+                .and_then(|t| serde_json::from_value(t.clone()).ok())
+                .unwrap_or_default();
+
+            let chain: Vec<PythonChainEntry> = parsed
+                .get("chain")
+                .and_then(|c| serde_json::from_value(c.clone()).ok())
+                .unwrap_or_default();
+
+            let formatted: Vec<String> = parsed
+                .get("formatted")
+                .and_then(|f| serde_json::from_value(f.clone()).ok())
+                .unwrap_or_default();
+
+            let locals_at_crash = traceback.last().and_then(|f| f.locals.clone());
+
+            Some(PythonExceptionInfo {
+                exc_type: parsed.get("exc_type")?.as_str()?.to_string(),
+                exc_msg: parsed.get("exc_msg")?.as_str()?.to_string(),
+                traceback,
+                chain,
+                locals_at_crash,
+                formatted,
+            })
+        })
+        .collect()
 }
 
 pub fn is_noise_path_pub(path: Option<&str>) -> bool {
@@ -761,11 +904,7 @@ fn is_noise_path(path: Option<&str>) -> bool {
         "/dev/random",
     ];
 
-    let noise_suffixes = [
-        "ld.so.cache",
-        "ld.so.preload",
-        "ld-nix.so.preload",
-    ];
+    let noise_suffixes = ["ld.so.cache", "ld.so.preload", "ld-nix.so.preload"];
 
     let noise_contains = [
         "gconv-modules",
@@ -814,6 +953,11 @@ fn is_significant_missing_file(path: &str) -> bool {
     }
 
     let insignificant_patterns = [
+        "python312.zip",
+        "python311.zip",
+        "python310.zip",
+        "python39.zip",
+        ".dwp",
         ".pyc",
         "__pycache__",
         "pyvenv.cfg",
@@ -836,9 +980,14 @@ fn is_significant_missing_file(path: &str) -> bool {
 
     // PATH search for executables is noise
     let path_search_dirs = [
-        "/usr/bin/", "/usr/sbin/", "/usr/local/bin/",
-        ".cargo/bin/", ".nix-profile/bin/", "/nix/profile/",
-        "/run/wrappers/bin/", "/run/current-system/sw/bin/",
+        "/usr/bin/",
+        "/usr/sbin/",
+        "/usr/local/bin/",
+        ".cargo/bin/",
+        ".nix-profile/bin/",
+        "/nix/profile/",
+        "/run/wrappers/bin/",
+        "/run/current-system/sw/bin/",
         "/home/", // home dir searches for executables
     ];
     for dir in &path_search_dirs {
@@ -893,5 +1042,65 @@ fn errno_name(errno: i64) -> String {
         113 => "EHOSTUNREACH".into(),
         115 => "EINPROGRESS".into(),
         _ => format!("errno({})", errno),
+    }
+}
+
+fn format_event_description(kind: &str, detail: &str) -> String {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(detail) {
+        match kind {
+            "python_call" => {
+                let func = v.get("func").and_then(|f| f.as_str()).unwrap_or("?");
+                let file = v.get("file").and_then(|f| f.as_str()).unwrap_or("");
+                let line = v.get("line").and_then(|l| l.as_u64()).unwrap_or(0);
+                let depth = v.get("depth").and_then(|d| d.as_u64()).unwrap_or(0);
+                let indent = "  ".repeat(depth as usize);
+                let short_file = file.rsplit('/').next().unwrap_or(file);
+                format!("{}-> {}() at {}:{}", indent, func, short_file, line)
+            }
+            "python_return" => {
+                let func = v.get("func").and_then(|f| f.as_str()).unwrap_or("?");
+                let depth = v.get("depth").and_then(|d| d.as_u64()).unwrap_or(0);
+                let retval = v.get("retval").and_then(|r| r.as_str()).unwrap_or("");
+                let indent = "  ".repeat(depth as usize);
+                let short_ret = if retval.len() > 60 {
+                    &retval[..60]
+                } else {
+                    retval
+                };
+                format!("{}<- {}() = {}", indent, func, short_ret)
+            }
+            "python_exception" | "python_unhandled_exception" => {
+                let exc_type = v
+                    .get("exc_type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("Exception");
+                let exc_msg = v.get("exc_msg").and_then(|m| m.as_str()).unwrap_or("");
+                let func = v.get("func").and_then(|f| f.as_str()).unwrap_or("");
+                format!("!! {}: {} in {}()", exc_type, exc_msg, func)
+            }
+            "native_trace_enter" => {
+                let func = v.get("func").and_then(|f| f.as_str()).unwrap_or("?");
+                let depth = v.get("depth").and_then(|d| d.as_u64()).unwrap_or(0);
+                let indent = "  ".repeat(depth as usize);
+                format!("{}-> {}()", indent, func)
+            }
+            "native_trace_exit" => {
+                let func = v.get("func").and_then(|f| f.as_str()).unwrap_or("?");
+                let depth = v.get("depth").and_then(|d| d.as_u64()).unwrap_or(0);
+                let indent = "  ".repeat(depth as usize);
+                format!("{}<- {}()", indent, func)
+            }
+            "process_exec" => {
+                if let Some(arr) = v.as_array() {
+                    let cmd: Vec<&str> = arr.iter().filter_map(|a| a.as_str()).collect();
+                    format!("exec {}", cmd.join(" "))
+                } else {
+                    format!("exec {}", detail)
+                }
+            }
+            _ => format!("[{}] {}", kind, detail),
+        }
+    } else {
+        format!("[{}] {}", kind, detail)
     }
 }

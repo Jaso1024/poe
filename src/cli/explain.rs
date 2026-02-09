@@ -85,7 +85,9 @@ pub fn execute(pack_path: PathBuf, json: bool) -> Result<()> {
         println!("{}", "--- process tree ---".yellow().bold());
         for proc in &output.process_tree {
             let status = if let Some(sig) = proc.signal {
-                format!("killed by {}", util::signal_name(sig)).red().to_string()
+                format!("killed by {}", util::signal_name(sig))
+                    .red()
+                    .to_string()
             } else if let Some(code) = proc.exit_code {
                 if code == 0 {
                     "ok".green().to_string()
@@ -118,12 +120,104 @@ pub fn execute(pack_path: PathBuf, json: bool) -> Result<()> {
     if !output.hotspots.is_empty() {
         println!("{}", "--- stack hotspots ---".yellow().bold());
         for hs in &output.hotspots {
-            println!(
-                "  {:5.1}% ({:>5}) {}",
-                hs.percentage, hs.count, hs.location
-            );
+            println!("  {:5.1}% ({:>5}) {}", hs.percentage, hs.count, hs.location);
         }
         println!();
+    }
+
+    if let Some(ref panic) = output.rust_panic {
+        println!("{}", "--- rust panic ---".red().bold());
+        println!("  {} {}", "panic:".red().bold(), panic.message,);
+        if let Some(ref loc) = panic.location {
+            println!(
+                "  {} {}:{}{}",
+                "at:".dimmed(),
+                loc.file,
+                loc.line,
+                loc.column.map(|c| format!(":{}", c)).unwrap_or_default(),
+            );
+        }
+        if let Some(ref thread) = panic.thread {
+            println!("  {} {}", "thread:".dimmed(), thread);
+        }
+        if !panic.backtrace.is_empty() {
+            println!("  {}", "backtrace:".dimmed());
+            for frame in &panic.backtrace {
+                let sym = frame.symbol.as_deref().unwrap_or("???");
+                let loc = match (&frame.file, frame.line) {
+                    (Some(f), Some(l)) => format!(" at {}:{}", f, l),
+                    _ => String::new(),
+                };
+                let is_user = !sym.contains("std::")
+                    && !sym.contains("core::")
+                    && !sym.contains("__rust_")
+                    && !sym.contains("backtrace::");
+                if is_user {
+                    println!("    {} #{}: {}{}", ">".cyan(), frame.index, sym.cyan(), loc,);
+                } else {
+                    println!(
+                        "    {} #{}: {}{}",
+                        " ".dimmed(),
+                        frame.index,
+                        Colorize::dimmed(sym),
+                        loc.dimmed(),
+                    );
+                }
+            }
+        }
+        println!();
+    }
+
+    if !output.python_exceptions.is_empty() {
+        println!("{}", "--- python exceptions ---".red().bold());
+        for exc in &output.python_exceptions {
+            println!(
+                "  {} {}: {}",
+                ">>>".red().bold(),
+                exc.exc_type.red().bold(),
+                exc.exc_msg,
+            );
+
+            if !exc.chain.is_empty() && exc.chain.len() > 1 {
+                println!("  {}", "exception chain:".dimmed());
+                for entry in &exc.chain {
+                    let cause = entry.cause.as_deref().unwrap_or("root");
+                    println!(
+                        "    [{}] {}: {}",
+                        cause,
+                        entry.exc_type,
+                        &entry.msg[..entry.msg.len().min(80)]
+                    );
+                }
+            }
+
+            println!("  {}", "traceback:".dimmed());
+            for frame in &exc.traceback {
+                println!(
+                    "    {} {}:{} in {}",
+                    ">".cyan(),
+                    frame.file,
+                    frame.line,
+                    frame.func.cyan(),
+                );
+                if let Some(ref locals) = frame.locals {
+                    for (k, v) in locals.iter().take(8) {
+                        println!("      {} = {}", k.yellow(), v.dimmed());
+                    }
+                }
+            }
+
+            if let Some(ref locals) = exc.locals_at_crash {
+                if !locals.is_empty() {
+                    println!("  {}", "locals at crash site:".dimmed());
+                    for (k, v) in locals.iter().take(12) {
+                        println!("    {} = {}", k.yellow(), v.dimmed());
+                    }
+                }
+            }
+
+            println!();
+        }
     }
 
     println!("{}", "--- file activity ---".yellow().bold());

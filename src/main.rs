@@ -4,12 +4,16 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod build;
 mod capture;
 mod cli;
+mod distributed;
 mod events;
 mod explain;
+mod hooks;
 mod pack;
 mod redact;
+mod serve;
 mod symbols;
 mod trace;
 mod util;
@@ -88,6 +92,39 @@ enum Commands {
         query: String,
     },
 
+    /// Build a project with instrumentation for poe capture
+    Build {
+        /// Output directory
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+
+        /// The build command to run (after --)
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
+
+    /// Start an HTTP API server for .poepack analysis
+    Serve {
+        /// Address to bind to (default: 127.0.0.1:3000)
+        #[arg(long, default_value = "127.0.0.1:3000")]
+        bind: String,
+
+        /// Directory to store uploaded packs
+        #[arg(long, default_value = "./poe-store")]
+        store: std::path::PathBuf,
+    },
+
+    /// Correlate distributed poe captures across multiple packs
+    Trace {
+        /// .poepack files to correlate
+        #[arg(required = true)]
+        packs: Vec<std::path::PathBuf>,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Check system capabilities for poe
     Doctor,
 }
@@ -113,6 +150,12 @@ fn main() {
         } => cli::diff::execute(baseline, candidate, json),
 
         Commands::Query { packet, query } => cli::query::execute(packet, query),
+
+        Commands::Build { output, command } => cli::build::execute(command, output),
+
+        Commands::Trace { packs, json } => cli::trace::execute(packs, json),
+
+        Commands::Serve { bind, store } => serve::server::start(&bind, &store),
 
         Commands::Doctor => cli::doctor::execute(),
     };

@@ -41,6 +41,12 @@ pub enum EventKind {
     StackSample,
     StdoutData,
     StderrData,
+    PythonCall,
+    PythonReturn,
+    PythonException,
+    PythonUnhandledException,
+    NativeTraceEnter,
+    NativeTraceExit,
 }
 
 impl EventKind {
@@ -57,6 +63,12 @@ impl EventKind {
             Self::StackSample => "stack_sample",
             Self::StdoutData => "stdout_data",
             Self::StderrData => "stderr_data",
+            Self::PythonCall => "python_call",
+            Self::PythonReturn => "python_return",
+            Self::PythonException => "python_exception",
+            Self::PythonUnhandledException => "python_unhandled_exception",
+            Self::NativeTraceEnter => "native_trace_enter",
+            Self::NativeTraceExit => "native_trace_exit",
         }
     }
 }
@@ -223,4 +235,73 @@ impl TriggerReason {
 pub enum CaptureMode {
     Lite,
     Full,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_kind_round_trip() {
+        let kinds = [
+            EventKind::ProcessStart,
+            EventKind::ProcessExit,
+            EventKind::ProcessExec,
+            EventKind::SyscallEntry,
+            EventKind::SyscallExit,
+            EventKind::Signal,
+            EventKind::FileOp,
+            EventKind::NetOp,
+            EventKind::StackSample,
+            EventKind::StdoutData,
+            EventKind::StderrData,
+            EventKind::PythonCall,
+            EventKind::PythonReturn,
+            EventKind::PythonException,
+            EventKind::PythonUnhandledException,
+            EventKind::NativeTraceEnter,
+            EventKind::NativeTraceExit,
+        ];
+
+        for kind in &kinds {
+            let s = kind.as_str();
+            assert!(!s.is_empty(), "EventKind {:?} has empty as_str", kind);
+        }
+    }
+
+    #[test]
+    fn file_op_kind_as_str() {
+        assert_eq!(FileOpKind::Open.as_str(), "open");
+        assert_eq!(FileOpKind::Read.as_str(), "read");
+        assert_eq!(FileOpKind::Write.as_str(), "write");
+        assert_eq!(FileOpKind::Close.as_str(), "close");
+    }
+
+    #[test]
+    fn net_op_kind_as_str() {
+        assert_eq!(NetOpKind::Connect.as_str(), "connect");
+        assert_eq!(NetOpKind::Send.as_str(), "send");
+        assert_eq!(NetOpKind::Recv.as_str(), "recv");
+    }
+
+    #[test]
+    fn trigger_reason_as_str() {
+        assert_eq!(TriggerReason::Crash.as_str(), "crash");
+        assert_eq!(TriggerReason::Signal.as_str(), "signal");
+        assert_eq!(TriggerReason::NonZeroExit.as_str(), "non_zero_exit");
+        assert_eq!(TriggerReason::Always.as_str(), "always");
+    }
+
+    #[test]
+    fn process_info_fields() {
+        let pi = ProcessInfo {
+            proc_id: 1234,
+            parent_proc_id: Some(1),
+            argv: vec!["test".into(), "--flag".into()],
+            cwd: "/tmp".into(),
+            start_ts: 1000,
+        };
+        assert_eq!(pi.proc_id, 1234);
+        assert_eq!(pi.argv.len(), 2);
+    }
 }
