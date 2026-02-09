@@ -127,6 +127,9 @@ enum Commands {
 
     /// Check system capabilities for poe
     Doctor,
+
+    /// Update poe to the latest version
+    Update,
 }
 
 fn main() {
@@ -158,6 +161,8 @@ fn main() {
         Commands::Serve { bind, store } => serve::server::start(&bind, &store),
 
         Commands::Doctor => cli::doctor::execute(),
+
+        Commands::Update => cli::update::execute(),
     };
 
     if let Err(e) = result {

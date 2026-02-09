@@ -15,19 +15,51 @@ samples, and language-level traces for Python, Rust, and instrumented C/C++.
 
 ## Install
 
-### From source (requires Rust toolchain)
+### One-liner (Linux x86_64 / aarch64)
 
+```sh
+curl -sSf https://raw.githubusercontent.com/Jaso1024/poe/main/install.sh | sh
 ```
+
+This downloads the latest release binary to `~/.local/bin/poe`. Set
+`POE_INSTALL_DIR` to change the install location.
+
+### From source
+
+```sh
+cargo install --git https://github.com/Jaso1024/poe
+```
+
+Or clone and build:
+
+```sh
+git clone https://github.com/Jaso1024/poe && cd poe
 cargo build --release
 cp target/release/poe ~/.local/bin/
 ```
 
 ### With Nix
 
+```sh
+nix run github:Jaso1024/poe           # run directly
+nix profile install github:Jaso1024/poe  # install to profile
 ```
+
+Or for development:
+
+```sh
 nix develop   # enters dev shell with all dependencies
 cargo build --release
 ```
+
+### Update
+
+```sh
+poe update
+```
+
+Self-updates to the latest GitHub release. Backs up the current binary and
+rolls back on failure.
 
 ## Quick Start
 

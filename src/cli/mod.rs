@@ -6,3 +6,4 @@ pub mod query;
 pub mod run;
 
 pub mod trace;
+pub mod update;
